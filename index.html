@@ -1,1 +1,348 @@
-Hello world!
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Стенд 9×3 м — оклейка стен 3D</title>
+<style>
+  :root { --bg:#f4f5f7; --panel:#fff; --line:#e2e4e8; --text:#1d2330; --muted:#6b7280; --accent:#1f4e9c; --accent2:#e8792b; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--text); background:var(--bg); }
+  #app { display:flex; height:100%; }
+  #view { position:relative; flex:1; min-width:0; }
+  #view canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #hint { position:absolute; left:12px; bottom:12px; background:rgba(255,255,255,.92); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--muted); max-width:440px; }
+  #views { position:absolute; left:12px; top:12px; display:flex; gap:4px; }
+  #panel { width:320px; background:var(--panel); border-left:1px solid var(--line); overflow:auto; padding:16px; display:flex; flex-direction:column; gap:20px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px; }
+  .walls { display:flex; flex-direction:column; gap:4px; }
+  .wall { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  .wall.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .wall input { width:16px; height:16px; margin:0; accent-color:var(--accent); }
+  .wall .id { font-weight:700; width:28px; }
+  .wall .meta { flex:1; font-size:12px; color:var(--muted); }
+  .wall .meta b { color:var(--text); font-weight:600; }
+  .wall .ar { font-size:12px; font-variant-numeric:tabular-nums; }
+  .total { margin-top:8px; padding:8px; border-radius:8px; background:#eef3fb; font-size:13px; }
+  button { font:inherit; font-size:13px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:#fff; color:var(--text); cursor:pointer; }
+  button:hover { border-color:#c5c9d0; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+  #drop { border:1.5px dashed #c5c9d0; border-radius:8px; padding:16px; text-align:center; color:var(--muted); font-size:12px; cursor:pointer; }
+  #drop.over { border-color:var(--accent); background:#eef3fb; }
+  #gallery { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-top:8px; }
+  #gallery img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:4px; border:1px solid var(--line); cursor:pointer; }
+  #gallery img:hover { border-color:var(--accent); }
+  .note { font-size:12px; color:var(--muted); margin-top:8px; }
+  .row { display:flex; gap:4px; flex-wrap:wrap; }
+  label.sl { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input[type=range] { width:100%; accent-color:var(--accent2); }
+  #imgctl[hidden] { display:none; }
+  @media (max-width:760px) { #app { flex-direction:column; } #view { height:55vh; flex:none; } #panel { width:auto; border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="views">
+      <button data-v="all">Весь стенд</button>
+      <button data-v="hb">Holbein</button>
+      <button data-v="wn">White Nights</button>
+    </div>
+    <div id="hint">Вращать — тянуть по пустому месту · Масштаб — колесо · Клик по стене — выбрать её для оклейки · Картинку на стене — тянуть мышью</div>
+  </div>
+  <aside id="panel">
+    <section>
+      <h2>Стены под оклейку</h2>
+      <div class="walls" id="walls"></div>
+      <div class="total" id="total"></div>
+    </section>
+    <section>
+      <h2>Изображения</h2>
+      <div id="drop">Перетащите файлы сюда или нажмите, чтобы выбрать<input id="file" type="file" accept="image/*" multiple hidden></div>
+      <div id="gallery"></div>
+      <div class="note" id="gnote">Клик по миниатюре — добавить на активную стену.</div>
+    </section>
+    <section id="imgctl" hidden>
+      <h2>Выбранное изображение</h2>
+      <div class="note" id="imginfo" style="margin:0 0 4px"></div>
+      <label class="sl">Ширина: <span id="wval"></span></label>
+      <input type="range" id="wrange" min="10" max="900" step="1">
+      <div class="row" style="margin-top:8px">
+        <button id="fitw">По ширине</button>
+        <button id="fith">По высоте</button>
+        <button id="fill">Заполнить</button>
+        <button id="center">По центру</button>
+        <button id="front">На передний план</button>
+        <button id="del">Удалить</button>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ---------- Stand geometry (metres). x: left→right, z: back(0)→front(3) ----------
+const H = 2.5, PX = 200;               // wall height, canvas px per metre
+const WALLS = [
+  { id:'W1', name:'Задняя стена', brand:'Holbein',      s:[0,0],   u:[1,0],  n:'+z', w:3.0 },
+  { id:'W2', name:'Подсобка, левый бок', brand:'Holbein', s:[3,0], u:[0,1],  n:'-x', w:1.0 },
+  { id:'W3', name:'Подсобка, фасад', brand:'Holbein',   s:[3,1],   u:[1,0],  n:'+z', w:0.5 },
+  { id:'W4', name:'Подсобка, фасад', brand:'White Nights', s:[3.5,1], u:[1,0], n:'+z', w:1.5 },
+  { id:'W5', name:'Подсобка, правый бок', brand:'White Nights', s:[5,1], u:[0,-1], n:'+x', w:1.0 },
+  { id:'W6', name:'Задняя стена', brand:'White Nights', s:[5,0],   u:[1,0],  n:'+z', w:4.0 },
+  { id:'W7', name:'Правая боковая стена', brand:'White Nights', s:[9,0], u:[0,1], n:'-x', w:3.0 },
+];
+const NORM = { '+z':[0,1], '-x':[-1,0], '+x':[1,0] };
+const ROT  = { '+z':0, '-x':-Math.PI/2, '+x':Math.PI/2 };
+
+// ---------- Three.js setup ----------
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+view.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x3b3f45);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI/2 - 0.02;
+controls.minDistance = 1.5; controls.maxDistance = 25;
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const dl = new THREE.DirectionalLight(0xffffff, 0.35); dl.position.set(3, 6, 8); scene.add(dl);
+
+// grid
+const grid = new THREE.GridHelper(30, 30, 0x555a61, 0x4a4e55); grid.position.set(4.5, -0.001, 1.5); scene.add(grid);
+
+// floor with plan drawn on it
+(function floor(){
+  const s = 100, c = document.createElement('canvas'); c.width = 9*s; c.height = 3*s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#c9ccd1'; g.fillRect(0,0,c.width,c.height);
+  g.strokeStyle = '#8d939b'; g.lineWidth = 2;
+  g.setLineDash([10,8]); g.beginPath(); g.moveTo(3.5*s,0); g.lineTo(3.5*s,3*s); g.stroke(); g.setLineDash([]);
+  const tbl = (cx,cy,sz)=>{ g.strokeRect((cx-sz/2)*s,(cy-sz/2)*s,sz*s,sz*s); };
+  const ch = (cx,cy)=>{ g.beginPath(); g.arc(cx*s,cy*s,0.1*s,0,7); g.stroke(); };
+  tbl(1.17,1.09,.6); [[1.17,.6],[1.17,1.58],[.68,1.09],[1.66,1.09],[1.17,1.91]].forEach(p=>ch(...p));
+  tbl(1.18,2.46,.8); tbl(4.82,2.0,.78);
+  tbl(8.2,.7,.6); [[7.82,.32],[8.58,.32],[7.82,1.08],[8.58,1.08]].forEach(p=>ch(...p));
+  tbl(7.0,1.92,.6); [[6.66,1.52],[7.34,1.52],[6.55,2.32],[7.0,2.47],[7.45,2.32]].forEach(p=>ch(...p));
+  g.fillStyle = '#6b7280'; g.font = '600 20px system-ui'; g.fillText('Holbein', 12, 3*s-12); g.fillText('White Nights', 3.5*s+12, 3*s-12);
+  const t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = 4;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(9,3), new THREE.MeshLambertMaterial({ map:t }));
+  m.rotation.x = -Math.PI/2; m.position.set(4.5,0,1.5); scene.add(m);
+})();
+
+// structure
+const structMat = new THREE.MeshLambertMaterial({ color:0xdfe2e6 });
+function box(x0,x1,z0,z1){ const m = new THREE.Mesh(new THREE.BoxGeometry(x1-x0,H,z1-z0), structMat); m.position.set((x0+x1)/2,H/2,(z0+z1)/2); scene.add(m); return m; }
+box(-0.06, 9.06, -0.08, 0);    // back wall
+box(9, 9.08, -0.08, 3);        // right wall
+box(3, 5, 0, 1);               // storage room
+
+// ---------- Wall surfaces (canvas textures) ----------
+const state = { activeWall:null, activeImg:null };
+const wallMeshes = [];
+WALLS.forEach(w => {
+  w.h = H; w.selected = false; w.items = [];
+  w.canvas = document.createElement('canvas'); w.canvas.width = Math.round(w.w*PX); w.canvas.height = Math.round(H*PX);
+  w.ctx = w.canvas.getContext('2d');
+  w.tex = new THREE.CanvasTexture(w.canvas); w.tex.encoding = THREE.sRGBEncoding; w.tex.anisotropy = 8;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w.w, H), new THREE.MeshLambertMaterial({ map:w.tex }));
+  const n = NORM[w.n], eps = 0.004;
+  mesh.position.set(w.s[0] + w.u[0]*w.w/2 + n[0]*eps, H/2, w.s[1] + w.u[1]*w.w/2 + n[1]*eps);
+  mesh.rotation.y = ROT[w.n];
+  mesh.userData.wall = w; w.mesh = mesh;
+  scene.add(mesh); wallMeshes.push(mesh);
+  w.center = new THREE.Vector3(mesh.position.x, H/2, mesh.position.z);
+  w.normal = new THREE.Vector3(n[0], 0, n[1]);
+});
+
+function draw(w){
+  const g = w.ctx, cw = w.canvas.width, chh = w.canvas.height;
+  g.clearRect(0,0,cw,chh);
+  g.fillStyle = w.selected ? '#ffffff' : '#dfe2e6'; g.fillRect(0,0,cw,chh);
+  if (w.selected) {
+    w.items.forEach(it => {
+      const iw = it.w*PX, ih = it.w/it.ar*PX;
+      g.drawImage(it.img, it.x*PX - iw/2, it.y*PX - ih/2, iw, ih);
+    });
+    const a = state.activeImg;
+    if (a && w.items.includes(a)) {
+      const iw = a.w*PX, ih = a.w/a.ar*PX;
+      g.lineWidth = 4; g.strokeStyle = '#e8792b'; g.strokeRect(a.x*PX-iw/2, a.y*PX-ih/2, iw, ih);
+    }
+    g.setLineDash([16,10]); g.lineWidth = w === state.activeWall ? 8 : 4;
+    g.strokeStyle = w === state.activeWall ? '#1f4e9c' : '#7ea0d6';
+    g.strokeRect(2,2,cw-4,chh-4); g.setLineDash([]);
+  }
+  g.font = '700 26px system-ui'; g.fillStyle = w.selected ? 'rgba(31,78,156,.85)' : 'rgba(107,114,128,.8)';
+  g.fillText(w.id, 14, chh-16);
+  w.tex.needsUpdate = true;
+}
+
+// ---------- Panel ----------
+const wallsEl = document.getElementById('walls');
+function renderList(){
+  wallsEl.innerHTML = '';
+  WALLS.forEach(w => {
+    const row = document.createElement('div');
+    row.className = 'wall' + (w === state.activeWall ? ' active' : '');
+    row.innerHTML = `<input type="checkbox" ${w.selected?'checked':''}><span class="id">${w.id}</span>
+      <span class="meta"><b>${w.name}</b><br>${w.brand} · ${w.w.toFixed(1)} × ${H} м</span><span class="ar">${(w.w*H).toFixed(2)} м²</span>`;
+    const cb = row.querySelector('input');
+    cb.addEventListener('click', e => { e.stopPropagation(); setSelected(w, cb.checked); });
+    row.addEventListener('click', () => { setActiveWall(w); focusWall(w); });
+    wallsEl.appendChild(row);
+  });
+  const sel = WALLS.filter(w => w.selected);
+  const sum = b => sel.filter(w => !b || w.brand === b).reduce((s,w)=>s+w.w*H,0);
+  document.getElementById('total').innerHTML = sel.length
+    ? `Выбрано стен: <b>${sel.length}</b> · <b>${sum().toFixed(2)} м²</b><br><span style="color:var(--muted)">Holbein ${sum('Holbein').toFixed(2)} м² · White Nights ${sum('White Nights').toFixed(2)} м²</span>`
+    : 'Стены не выбраны';
+}
+function setSelected(w, v){
+  w.selected = v;
+  if (!v && state.activeImg && w.items.includes(state.activeImg)) setActiveImg(null);
+  if (v) state.activeWall = w;
+  WALLS.forEach(draw); renderList(); updateGalleryNote();
+}
+function setActiveWall(w){ state.activeWall = w; WALLS.forEach(draw); renderList(); updateGalleryNote(); }
+
+// ---------- Images ----------
+const library = [];
+const fileEl = document.getElementById('file'), drop = document.getElementById('drop'), gallery = document.getElementById('gallery');
+drop.addEventListener('click', () => fileEl.click());
+fileEl.addEventListener('change', () => { addFiles(fileEl.files); fileEl.value = ''; });
+['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+function addFiles(files){
+  [...files].filter(f => f.type.startsWith('image/')).forEach(f => {
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => {
+      library.push({ img, name:f.name });
+      const t = document.createElement('img'); t.src = url; t.title = f.name;
+      t.addEventListener('click', () => placeOnWall(img, f.name));
+      gallery.appendChild(t);
+    };
+    img.src = url;
+  });
+}
+function updateGalleryNote(){
+  const w = state.activeWall;
+  document.getElementById('gnote').textContent = w && w.selected
+    ? `Клик по миниатюре — добавить на ${w.id} (${w.name}, ${w.brand}).`
+    : 'Сначала выберите стену (галочка в списке или клик по стене).';
+}
+function placeOnWall(img, name){
+  const w = state.activeWall;
+  if (!w || !w.selected) { updateGalleryNote(); return; }
+  const ar = img.naturalWidth / img.naturalHeight;
+  const it = { img, name, ar, x:w.w/2, y:H/2, w:Math.min(w.w, H*ar) };
+  w.items.push(it); setActiveImg(it, w);
+}
+function wallOf(it){ return WALLS.find(w => w.items.includes(it)); }
+function setActiveImg(it, w){
+  state.activeImg = it;
+  if (w) state.activeWall = w;
+  WALLS.forEach(draw); renderList(); updateImgCtl(); updateGalleryNote();
+}
+
+// image controls
+const ctl = document.getElementById('imgctl'), wr = document.getElementById('wrange');
+function updateImgCtl(){
+  const it = state.activeImg; ctl.hidden = !it; if (!it) return;
+  const w = wallOf(it);
+  document.getElementById('imginfo').textContent = `${it.name} — на ${w.id}`;
+  wr.max = Math.round(Math.max(w.w, H*it.ar) * 150);
+  wr.value = Math.round(it.w*100);
+  document.getElementById('wval').textContent = `${Math.round(it.w*100)} × ${Math.round(it.w/it.ar*100)} см`;
+}
+wr.addEventListener('input', () => { const it = state.activeImg; if (!it) return; it.w = wr.value/100; draw(wallOf(it)); updateImgCtl(); });
+const act = fn => () => { const it = state.activeImg; if (!it) return; const w = wallOf(it); fn(it, w); draw(w); updateImgCtl(); };
+document.getElementById('fitw').onclick = act((it,w) => { it.w = w.w; it.x = w.w/2; });
+document.getElementById('fith').onclick = act((it,w) => { it.w = H*it.ar; it.y = H/2; });
+document.getElementById('fill').onclick = act((it,w) => { it.w = Math.max(w.w, H*it.ar); it.x = w.w/2; it.y = H/2; });
+document.getElementById('center').onclick = act((it,w) => { it.x = w.w/2; it.y = H/2; });
+document.getElementById('front').onclick = act((it,w) => { w.items.splice(w.items.indexOf(it),1); w.items.push(it); });
+document.getElementById('del').onclick = () => { const it = state.activeImg; if (!it) return; const w = wallOf(it); w.items.splice(w.items.indexOf(it),1); setActiveImg(null); };
+
+// ---------- Picking & dragging ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function hit(e, meshes){
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(ndc, camera);
+  const hs = ray.intersectObjects(meshes.concat(scene.children.filter(o => o.isMesh && !wallMeshes.includes(o) && o.geometry.type==='BoxGeometry')));
+  if (!hs.length || !hs[0].object.userData.wall) return null;
+  const w = hs[0].object.userData.wall, uv = hs[0].uv;
+  return { w, mx: uv.x*w.w, my: (1-uv.y)*H };
+}
+let drag = null, down = null;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => {
+  down = { x:e.clientX, y:e.clientY };
+  const h = hit(e, wallMeshes); if (!h || !h.w.selected) return;
+  for (let i = h.w.items.length-1; i >= 0; i--) {
+    const it = h.w.items[i], hw = it.w/2, hh = it.w/it.ar/2;
+    if (Math.abs(h.mx-it.x) <= hw && Math.abs(h.my-it.y) <= hh) {
+      drag = { it, w:h.w, dx:it.x-h.mx, dy:it.y-h.my };
+      controls.enabled = false; el.setPointerCapture(e.pointerId);
+      setActiveImg(it, h.w); return;
+    }
+  }
+});
+el.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const h = hit(e, [drag.w.mesh]); if (!h || h.w !== drag.w) return;
+  drag.it.x = h.mx + drag.dx; drag.it.y = h.my + drag.dy; draw(drag.w);
+});
+el.addEventListener('pointerup', e => {
+  if (drag) { drag = null; controls.enabled = true; return; }
+  if (!down || Math.hypot(e.clientX-down.x, e.clientY-down.y) > 5) return;
+  const h = hit(e, wallMeshes);
+  if (!h) { if (state.activeImg) setActiveImg(null); return; }
+  if (!h.w.selected) setSelected(h.w, true);
+  state.activeImg = null; setActiveWall(h.w); updateImgCtl();
+});
+
+// ---------- Camera views ----------
+let anim = null;
+function flyTo(pos, target){
+  anim = { p0:camera.position.clone(), t0:controls.target.clone(), p1:pos, t1:target, k:0 };
+}
+function focusWall(w){
+  const dist = Math.max(2.6, w.w*1.3 + 1);
+  flyTo(w.center.clone().add(w.normal.clone().multiplyScalar(dist)).setY(1.6), w.center.clone());
+}
+const VIEWS = {
+  all: [new THREE.Vector3(4.5, 4.2, 11.5), new THREE.Vector3(4.5, 1.1, 1.2)],
+  hb:  [new THREE.Vector3(1.9, 1.9, 7.4),  new THREE.Vector3(1.9, 1.2, 0.6)],
+  wn:  [new THREE.Vector3(6.4, 1.9, 8.6),  new THREE.Vector3(6.4, 1.2, 0.6)],
+};
+document.querySelectorAll('#views button').forEach(b => b.onclick = () => flyTo(VIEWS[b.dataset.v][0].clone(), VIEWS[b.dataset.v][1].clone()));
+camera.position.copy(VIEWS.all[0]); controls.target.copy(VIEWS.all[1]);
+
+// ---------- Loop ----------
+function resize(){
+  const r = view.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+(function loop(){
+  requestAnimationFrame(loop);
+  if (anim) {
+    anim.k = Math.min(1, anim.k + 0.05); const e = 1 - Math.pow(1-anim.k, 3);
+    camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.t0, anim.t1, e);
+    if (anim.k >= 1) anim = null;
+  }
+  controls.update(); renderer.render(scene, camera);
+})();
+WALLS.forEach(draw); renderList(); updateGalleryNote(); resize();
+</script>
+</body>
+</html>
